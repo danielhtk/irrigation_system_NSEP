@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ladang Rahman — Irrigation Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #1F3327; --surface: #28402F; --surface-2: #2F4A38; --line: rgba(244,239,226,0.14);
+    --text: #F4EFE2; --text-muted: #A9BBAE;
+    --amber: #E8A33D; --blue: #5FA8D3; --sage: #7FC79A; --rust: #E0703F;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --font-body: 'Manrope', -apple-system, 'Segoe UI', sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:#F3EFE2; --surface:#FFFFFF; --surface-2:#EAE3D0; --line:rgba(31,51,39,0.13);
+      --text:#1F3327; --text-muted:#5B6E60; --amber:#C9821F; --blue:#2E6E96; --sage:#2F7A52; --rust:#B8501F;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#F3EFE2; --surface:#FFFFFF; --surface-2:#EAE3D0; --line:rgba(31,51,39,0.13);
+    --text:#1F3327; --text-muted:#5B6E60; --amber:#C9821F; --blue:#2E6E96; --sage:#2F7A52; --rust:#B8501F;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-body); min-height: 100vh; padding: 20px 16px 48px; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .farm-name { font-size: clamp(22px, 4vw, 30px); font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+  .farm-sub { color: var(--text-muted); font-size: 13.5px; margin: 4px 0 0; }
+  .status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sage); flex-shrink: 0; }
+  .status-pill.alert .status-dot { background: var(--rust); }
+  .status-pill.alert { color: var(--rust); border-color: color-mix(in srgb, var(--rust) 40%, var(--line)); }
+  .status-pill.warn .status-dot { background: var(--amber); }
+  .status-pill.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
+
+  .gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+  .gauge-card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px 10px 14px; text-align: center; }
+  .gauge-card svg { width: 100%; max-width: 180px; height: auto; }
+  .gauge-label { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; font-weight: 500; }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
+  .panel-title { font-size: 13.5px; font-weight: 700; margin: 0 0 12px; }
+
+  .row2 { display: grid; grid-template-columns: 1.1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  @media (max-width: 620px) { .row2 { grid-template-columns: 1fr; } .gauges { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 420px) { .gauges { grid-template-columns: 1fr; } }
+
+  .mode-toggle { display: flex; gap: 6px; background: var(--surface-2); border-radius: 6px; padding: 4px; margin-bottom: 14px; }
+  .mode-btn { flex: 1; padding: 8px 0; border: none; background: transparent; color: var(--text-muted); font-family: var(--font-body); font-size: 13px; font-weight: 600; border-radius: 4px; cursor: pointer; }
+  .mode-btn.active { background: var(--surface); color: var(--text); }
+  .mode-sub { font-size: 11px; color: var(--text-muted); margin: -8px 0 14px; }
+
+  .pump-status { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .pump-led { width: 14px; height: 14px; border-radius: 50%; background: var(--surface-2); flex-shrink: 0; transition: background 0.3s, box-shadow 0.3s; }
+  .pump-led.on { background: var(--amber); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--amber) 60%, transparent); }
+  .pump-status-text { font-weight: 700; font-size: 15px; }
+  .pump-status-sub { font-size: 12px; color: var(--text-muted); }
+
+  .pump-switch { width: 100%; padding: 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-family: var(--font-body); font-weight: 700; font-size: 14px; cursor: pointer; }
+  .pump-switch:disabled { opacity: 0.4; cursor: not-allowed; }
+  .pump-switch.on { background: color-mix(in srgb, var(--amber) 22%, var(--surface-2)); border-color: var(--amber); }
+
+  .timed-row { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .timed-title { font-size: 13px; font-weight: 700; margin: 0 0 8px; }
+  .timed-sub { font-weight: 500; color: var(--text-muted); font-size: 11.5px; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip { flex: 1 1 auto; min-width: 52px; padding: 7px 0; border: 1px solid var(--line); background: var(--surface-2); color: var(--text-muted); font-family: var(--font-body); font-size: 12.5px; font-weight: 700; border-radius: 4px; cursor: pointer; }
+  .chip.active { color: var(--text); border-color: var(--amber); background: color-mix(in srgb, var(--amber) 18%, var(--surface-2)); }
+  .chip:disabled { opacity: 0.4; cursor: not-allowed; }
+  .stepper-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .stepper-row .chip { flex: 1; }
+  .water-val { flex: 1.3; text-align: center; font-family: var(--font-mono); font-weight: 700; font-size: 15px; }
+
+  .fact-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .fact-row:last-child { border-bottom: none; }
+  .fact-val { font-family: var(--font-mono); font-weight: 700; }
+  .fact-val.ok { color: var(--sage); }
+  .fact-val.bad { color: var(--rust); }
+  .probe-dots { display: inline-flex; gap: 6px; align-items: center; }
+  .probe-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--sage); }
+  .probe-dot.bad { background: var(--rust); }
+  .probe-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+
+  .alert-list { display: flex; flex-direction: column; gap: 8px; }
+  .alert-item { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; background: color-mix(in srgb, var(--rust) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--rust) 35%, var(--line)); border-radius: 5px; padding: 9px 10px; color: var(--text); }
+  .alert-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rust); margin-top: 5px; flex-shrink: 0; }
+  .no-alert { font-size: 13px; color: var(--text-muted); }
+
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .chart-head .panel-title { margin: 0; }
+  .chart-legend { font-size: 11.5px; color: var(--text-muted); }
+  .chart-wrap svg { width: 100%; height: auto; display: block; }
+
+  details.panel summary { cursor: pointer; font-size: 13.5px; font-weight: 700; list-style: none; }
+  details.panel summary::-webkit-details-marker { display: none; }
+  .log-line { font-family: var(--font-mono); font-size: 11.5px; padding: 3px 0; border-bottom: 1px solid var(--line); color: var(--text-muted); }
+  .log-line .dir { display: inline-block; width: 42px; font-weight: 700; }
+  .log-line.tx .dir { color: var(--amber); }
+  .log-line.rx .dir { color: var(--blue); }
+  .log-wrap { max-height: 180px; overflow-y: auto; margin-top: 10px; }
+
+  .footer-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+  .updated-at { font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
+  .thresh-note { font-size: 11.5px; color: var(--text-muted); margin-top: 14px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <div>
+      <p class="farm-name">Ladang Rahman</p>
+      <p class="farm-sub">Field node 01 &middot; live from local bridge server</p>
+    </div>
+    <div id="statusPill" class="status-pill"><span class="status-dot"></span><span id="statusText">Connecting&hellip;</span></div>
+  </div>
+
+  <div class="gauges">
+    <div class="gauge-card">
+      <svg viewBox="0 0 200 120"><path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--surface-2)" stroke-width="14" stroke-linecap="round"/><path id="arcMoisture" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--blue)" stroke-width="14" stroke-linecap="round" pathLength="100" stroke-dasharray="0 100"/><text x="100" y="88" text-anchor="middle" fill="var(--text)" font-family="var(--font-mono)" font-weight="700" font-size="30" id="moistureNum">--</text><text x="100" y="106" text-anchor="middle" fill="var(--text-muted)" font-family="var(--font-mono)" font-size="13">%</text></svg>
+      <p class="gauge-label">Soil moisture</p>
+    </div>
+    <div class="gauge-card">
+      <svg viewBox="0 0 200 120"><path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--surface-2)" stroke-width="14" stroke-linecap="round"/><path id="arcTemp" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--amber)" stroke-width="14" stroke-linecap="round" pathLength="100" stroke-dasharray="0 100"/><text x="100" y="88" text-anchor="middle" fill="var(--text)" font-family="var(--font-mono)" font-weight="700" font-size="30" id="tempNum">--</text><text x="100" y="106" text-anchor="middle" fill="var(--text-muted)" font-family="var(--font-mono)" font-size="13">&#176;C</text></svg>
+      <p class="gauge-label">Temperature</p>
+    </div>
+    <div class="gauge-card">
+      <svg viewBox="0 0 200 120"><path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--surface-2)" stroke-width="14" stroke-linecap="round"/><path id="arcHum" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--sage)" stroke-width="14" stroke-linecap="round" pathLength="100" stroke-dasharray="0 100"/><text x="100" y="88" text-anchor="middle" fill="var(--text)" font-family="var(--font-mono)" font-weight="700" font-size="30" id="humNum">--</text><text x="100" y="106" text-anchor="middle" fill="var(--text-muted)" font-family="var(--font-mono)" font-size="13">%</text></svg>
+      <p class="gauge-label">Humidity</p>
+    </div>
+  </div>
+
+  <div class="row2">
+    <div class="panel">
+      <p class="panel-title">Pump control</p>
+      <div class="mode-toggle">
+        <button class="mode-btn" id="btnAuto" onclick="setMode(true)">Auto</button>
+        <button class="mode-btn" id="btnManual" onclick="setMode(false)">Manual</button>
+      </div>
+      <p class="mode-sub">Mode reflects the last command sent from this dashboard — the firmware doesn't report its mode back</p>
+      <div class="pump-status">
+        <span class="pump-led" id="pumpLed"></span>
+        <div>
+          <div class="pump-status-text" id="pumpText">--</div>
+          <div class="pump-status-sub" id="pumpSub">Waiting for a reading</div>
+        </div>
+      </div>
+      <button class="pump-switch" id="pumpBtn" onclick="toggleManualPump()" disabled>Turn pump on</button>
+      <div class="timed-row">
+        <p class="timed-title">Timed watering <span class="timed-sub">auto-off, max 5 min</span></p>
+        <div class="chip-row" id="presetRow">
+          <button class="chip" data-secs="10" onclick="setWaterSecs(10)">10s</button>
+          <button class="chip" data-secs="30" onclick="setWaterSecs(30)">30s</button>
+          <button class="chip" data-secs="60" onclick="setWaterSecs(60)">1m</button>
+          <button class="chip" data-secs="120" onclick="setWaterSecs(120)">2m</button>
+          <button class="chip" data-secs="240" onclick="setWaterSecs(240)">4m</button>
+          <button class="chip" data-secs="300" onclick="setWaterSecs(300)">5m</button>
+        </div>
+        <div class="stepper-row">
+          <button class="chip" onclick="adjustWater(-60)">−1m</button>
+          <button class="chip" onclick="adjustWater(-10)">−10s</button>
+          <span class="water-val" id="waterVal">1m 00s</span>
+          <button class="chip" onclick="adjustWater(10)">+10s</button>
+          <button class="chip" onclick="adjustWater(60)">+1m</button>
+        </div>
+        <button class="pump-switch" id="waterBtn" onclick="toggleTimedWater()" disabled>Water for 1m 00s</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">Sensor health</p>
+      <div class="fact-row"><span>Active sensors</span><span class="fact-val" id="activeCountVal">--</span></div>
+      <div class="fact-row"><span>Sensor fault</span><span class="fact-val" id="faultVal">--</span></div>
+      <div class="fact-row"><span>Probes</span><span class="probe-dots" id="probeDots">--</span></div>
+      <div class="fact-row"><span>Rain detected</span><span class="fact-val" id="rainVal">--</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="panel-title">Alerts</p>
+    <div class="alert-list" id="alertList"><p class="no-alert">No alerts right now</p></div>
+  </div>
+
+  <div class="panel">
+    <div class="chart-head"><p class="panel-title">Soil moisture trend</p><span class="chart-legend">last 50 readings</span></div>
+    <div class="chart-wrap"><svg id="chartSvg" viewBox="0 0 640 160" preserveAspectRatio="none"></svg></div>
+  </div>
+
+  <details class="panel">
+    <summary>Serial log</summary>
+    <div class="log-wrap" id="logWrap"></div>
+  </details>
+
+  <div class="footer-bar">
+    <span class="updated-at" id="updatedAt">No data yet</span>
+  </div>
+
+  <p class="thresh-note">Pump thresholds (default 20% on / 45% off) are set on the Arduino and aren't reported back over telemetry, so they're not shown live here. Send a <code>THRESH:low,high</code> command from the log panel's underlying API to change them.</p>
+
+</div>
+
+<script>
+  const POLL_MS = 2000;
+  let autoMode = true;
+  let lastLatest = null;
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function setArc(id, pct) { document.getElementById(id).setAttribute('stroke-dasharray', clamp(pct, 0, 100) + ' 100'); }
+
+  async function sendCommand(cmd) {
+    try {
+      await fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd }) });
+    } catch (e) { /* server unreachable, next poll will show disconnected */ }
+  }
+
+  function setMode(isAuto) {
+    autoMode = isAuto;
+    sendCommand(isAuto ? 'AUTO:ON' : 'AUTO:OFF');
+    updateModeUI();
+    renderWaterUI();
+  }
+
+  function toggleManualPump() {
+    if (autoMode || !lastLatest) return;
+    const turnOn = !lastLatest.pumpState;
+    sendCommand(turnOn ? 'PUMP:ON' : 'PUMP:OFF');
+  }
+
+  function updateModeUI() {
+    document.getElementById('btnAuto').classList.toggle('active', autoMode);
+    document.getElementById('btnManual').classList.toggle('active', !autoMode);
+    document.getElementById('pumpBtn').disabled = autoMode || !lastLatest;
+    renderWaterUI();
+  }
+
+  let waterSecs = 60;
+
+  function fmtDur(totalSecs) {
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+  }
+
+  function renderWaterUI() {
+    document.getElementById('waterVal').textContent = fmtDur(waterSecs);
+    const locked = autoMode || !lastLatest;
+    const btn = document.getElementById('waterBtn');
+    const running = lastLatest && lastLatest.pumpState;
+    const left = lastLatest ? (lastLatest.waterLeft || 0) : 0;
+    if (running && left > 0) {
+      btn.textContent = `Watering… ${fmtDur(left)} left (tap to stop)`;
+    } else if (running) {
+      btn.textContent = 'Running (tap to stop)';
+    } else {
+      btn.textContent = 'Water for ' + fmtDur(waterSecs);
+    }
+    btn.disabled = locked;
+    document.querySelectorAll('#presetRow .chip').forEach(el => {
+      el.classList.toggle('active', parseInt(el.dataset.secs, 10) === waterSecs);
+      el.disabled = locked;
+    });
+    document.querySelectorAll('.stepper-row .chip').forEach(el => { el.disabled = locked; });
+  }
+
+  function setWaterSecs(v) { waterSecs = clamp(Math.round(v), 10, 300); renderWaterUI(); }
+  function adjustWater(delta) { setWaterSecs(waterSecs + delta); }
+
+  function toggleTimedWater() {
+    if (autoMode || !lastLatest) return;
+    if (lastLatest.pumpState) sendCommand('PUMP:OFF');
+    else sendCommand('WATER:' + waterSecs);
+  }
+
+  function renderReading(latest) {
+    lastLatest = latest;
+    document.getElementById('moistureNum').textContent = latest.soilPct;
+    document.getElementById('tempNum').textContent = latest.tempC ?? '--';
+    document.getElementById('humNum').textContent = latest.humPct ?? '--';
+    setArc('arcMoisture', latest.soilPct);
+    setArc('arcTemp', latest.tempC != null ? (latest.tempC / 50) * 100 : 0);
+    setArc('arcHum', latest.humPct ?? 0);
+
+    document.getElementById('pumpLed').classList.toggle('on', latest.pumpState);
+    document.getElementById('pumpText').textContent = latest.pumpState ? 'Pump on' : 'Pump off';
+    document.getElementById('pumpSub').textContent = (latest.waterLeft || 0) > 0
+      ? `Timed run — ${fmtDur(latest.waterLeft)} left`
+      : (autoMode ? 'Automatic control' : 'Manual override');
+    const pumpBtn = document.getElementById('pumpBtn');
+    pumpBtn.textContent = latest.pumpState ? 'Turn pump off' : 'Turn pump on';
+    pumpBtn.classList.toggle('on', latest.pumpState);
+
+    document.getElementById('activeCountVal').textContent = latest.activeCount + ' / 3';
+    const faultEl = document.getElementById('faultVal');
+    faultEl.textContent = latest.sensorFault ? 'Yes' : 'No';
+    faultEl.className = 'fact-val ' + (latest.sensorFault ? 'bad' : 'ok');
+    const rainEl = document.getElementById('rainVal');
+    rainEl.textContent = latest.rainDetected ? 'Yes' : 'No';
+    rainEl.className = 'fact-val ' + (latest.rainDetected ? 'bad' : 'ok');
+
+    const dotsEl = document.getElementById('probeDots');
+    if (latest.probeMap == null) {
+      dotsEl.innerHTML = '<span class="probe-tag">n/a</span>';
+    } else {
+      const out = [];
+      let dots = '';
+      for (let p = 0; p < 3; p++) {
+        const bad = ((latest.probeMap >> p) & 1) === 1;
+        if (bad) out.push('P' + p);
+        dots += `<span class="probe-dot${bad ? ' bad' : ''}" title="Probe ${p}${bad ? ' excluded' : ' voting'}"></span>`;
+      }
+      dots += `<span class="probe-tag">${out.length ? out.join(', ') + ' out' : 'all voting'}</span>`;
+      dotsEl.innerHTML = dots;
+    }
+
+    const alerts = [];
+    if (latest.sensorFault) alerts.push('Auto unavailable (sensor fault) — manual mode only, check probes');
+    if (latest.pumpState && latest.sensorFault) alerts.push('Manual override running — capped at 5 min');
+    if (latest.probeMap) {
+      for (let p = 0; p < 3; p++) {
+        if (((latest.probeMap >> p) & 1) === 1) alerts.push(`Probe ${p} excluded from vote — check sensor`);
+      }
+    }
+    if (latest.soilPct <= 20) alerts.push('Soil critically dry — drought risk');
+    if (latest.soilPct >= 85) alerts.push('Soil saturated — risk of overwatering');
+    document.getElementById('alertList').innerHTML = alerts.length
+      ? alerts.map(a => `<div class="alert-item"><span class="dot"></span><span>${a}</span></div>`).join('')
+      : '<p class="no-alert">No alerts right now</p>';
+
+    const d = new Date(latest.t * 1000);
+    document.getElementById('updatedAt').textContent = 'Reading at ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    updateModeUI();
+  }
+
+  function drawChart(history) {
+    const svg = document.getElementById('chartSvg');
+    const w = 640, h = 160, pad = 20;
+    let grid = '';
+    [0, 25, 50, 75, 100].forEach(v => {
+      const y = h - pad - (v / 100) * (h - pad * 2);
+      grid += `<line x1="${pad}" y1="${y}" x2="${w - 5}" y2="${y}" stroke="var(--line)" stroke-width="1"/>`;
+      grid += `<text x="2" y="${y + 4}" font-family="var(--font-mono)" font-size="9" fill="var(--text-muted)">${v}</text>`;
+    });
+    let line = '';
+    if (history.length > 1) {
+      const stepX = (w - pad - 10) / (history.length - 1);
+      const coords = history.map((p, i) => [pad + i * stepX, h - pad - (p.soilPct / 100) * (h - pad * 2)]);
+      const path = coords.map((c, i) => (i === 0 ? 'M' : 'L') + c[0].toFixed(1) + ' ' + c[1].toFixed(1)).join(' ');
+      const area = path + ` L ${coords[coords.length - 1][0].toFixed(1)} ${h - pad} L ${coords[0][0].toFixed(1)} ${h - pad} Z`;
+      line = `<path d="${area}" fill="var(--blue)" opacity="0.12"/><path d="${path}" fill="none" stroke="var(--blue)" stroke-width="2"/>`;
+      const last = coords[coords.length - 1];
+      line += `<circle cx="${last[0]}" cy="${last[1]}" r="3.5" fill="var(--blue)"/>`;
+    }
+    svg.innerHTML = grid + line;
+  }
+
+  function renderLog(log) {
+    const wrap = document.getElementById('logWrap');
+    wrap.innerHTML = log.slice(-50).reverse().map(l => {
+      const d = new Date(l.t * 1000);
+      const dir = l.dir.startsWith('tx') ? 'tx' : 'rx';
+      const label = l.dir === 'tx-sim' ? 'sim-tx' : dir;
+      return `<div class="log-line ${dir}"><span class="dir">${label}</span>${d.toLocaleTimeString()} &nbsp; ${l.text}</div>`;
+    }).join('') || '<p class="no-alert">No traffic yet</p>';
+  }
+
+  async function poll() {
+    const statusPill = document.getElementById('statusPill');
+    const statusText = document.getElementById('statusText');
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+
+      if (data.connected) {
+        statusPill.className = 'status-pill';
+        statusText.textContent = 'Live — ' + data.port;
+      } else if (data.simulated) {
+        statusPill.className = 'status-pill warn';
+        statusText.textContent = 'Simulated data — no BLE connected';
+      } else {
+        statusPill.className = 'status-pill alert';
+        statusText.textContent = 'No data source';
+      }
+
+      if (data.latest) renderReading(data.latest);
+      if (data.history) drawChart(data.history);
+
+      const logRes = await fetch('/api/log');
+      renderLog(await logRes.json());
+    } catch (e) {
+      statusPill.className = 'status-pill alert';
+      statusText.textContent = 'Can\u2019t reach local server';
+    }
+  }
+
+  poll();
+  setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>

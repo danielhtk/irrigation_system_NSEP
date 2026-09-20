@@ -1,0 +1,43 @@
+# Arduino build outputs
+build/
+*.elf
+*.hex
+*.bin
+*.eep
+*.map
+*.lst
+*.sym
+*.d
+*.o
+*.a
+
+# Local disassembly / capture dumps
+temp_output/
+
+# Local hardware tests (wired loopback etc.), not for commit
+test/
+
+# Local working notes, not for commit
+docs/
+
+# VS Code - contains absolute local paths and COM port
+.vscode/
+
+# Python (irrigation_server/)
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Local env / logs
+.env
+*.log
+instance/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,5 @@
+flask>=3.0
+pyserial>=3.5
+requests>=2.31  # Open-Meteo rain forecast (optional; forecast disabled without it)
+# NOTE: --ble mode needs no extra pip packages (stdlib only),
+# but the Linux host needs BlueZ: sudo apt install bluez
