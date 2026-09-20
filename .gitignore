@@ -17,6 +17,9 @@ temp_output/
 # Local hardware tests (wired loopback etc.), not for commit
 test/
 
+# Local board config overrides (defaults live in default_config.h)
+config.h
+
 # Local working notes, not for commit
 docs/
 

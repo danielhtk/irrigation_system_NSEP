@@ -21,7 +21,9 @@ Serial monitor and BLE both run at 9600 baud.
 - `irrigation_controller.ino` — owns `Serial` / `SoftwareSerial` / `DHT`,
   implements the bridge, `setup()`/`loop()`.
 - `global.h` — single include point for all `.c` modules.
-- `config.h` — pins, calibration, thresholds, timing, debug-probe flags.
+- `config.h` — your local overrides (gitignored, optional); `default_config.h`
+  holds every default — copy a line over and change it to tune pins,
+  calibration, thresholds, timing, debug-probe flags.
 - `sys.c` / `sys.h` — board bring-up, fail-safe relay init, main scheduler.
 - `sys_tick.*` — 1 ms system tick from Timer2 (compare with signed diffs).
 - `pump_control.*` — hysteresis + 5 min safety cutoff + cooldown, plus the

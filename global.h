@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "config.h"
+#include "default_config.h"
 #include "app_state.h"
 #include "sys.h"
 

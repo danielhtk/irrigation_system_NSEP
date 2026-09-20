@@ -1,10 +1,11 @@
 /*
- * config.h - pins, calibration, thresholds, timing
- * Tested wiring: relay on 7, DHT11 on 6. DHT uses the Adafruit DHT library.
+ * default_config.h - tracked defaults. Don't edit per-board values here;
+ * copy the lines you need into config.h (gitignored, optional) instead.
+ * Anything not overridden there keeps the default below.
  */
 
-#ifndef CONFIG_H
-#define CONFIG_H
+#ifndef DEFAULT_CONFIG_H
+#define DEFAULT_CONFIG_H
 
 #include <Arduino.h>   /* for A0..A2 */
 #include <stdint.h>
@@ -98,4 +99,10 @@ static inline uint8_t soil_pin(uint8_t probe) {
 #define AUTO_RESUME_AFTER_FAULT         0
 #define AUTO_RESUME_HEALTHY_READINGS    10   /* consecutive healthy sense cycles (2s each = 20s) */
 
-#endif /* CONFIG_H */
+/* Local overrides (optional, gitignored). If config.h exists it is
+   included here, after the defaults, so plain #defines there win. */
+#if defined(__has_include) && __has_include("config.h")
+#include "config.h"
+#endif
+
+#endif /* DEFAULT_CONFIG_H */
