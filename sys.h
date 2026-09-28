@@ -1,51 +1,39 @@
 /*
- * sys.h - board bring-up + bridge to the C++ objects in the .ino.
- * .c files never touch Serial/SoftwareSerial/DHT directly.
+ * sys.h - init funnel, error codes, fatal handler.
+ *
+ * Every driver returns int32_t: 0 on success, negative on failure.
+ * SYS_ERROR_CHECK wraps a call that returns a *status*. Never wrap one that
+ * returns a *measurement* (ADC_Read, GPIO_Read) - a sample of 0 is a legal
+ * reading, not a failure, and those use an out-parameter instead.
  */
 
 #ifndef SYS_H
 #define SYS_H
 
-#include <stdbool.h>
-#include <stddef.h>   /* size_t */
-
-/* Fallback when included without config.h. */
-#ifndef DEBUG_HC05_PROBE
-#define DEBUG_HC05_PROBE 0
-#endif
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Board bring-up */
-void sys_init(void);
+#define SYS_SUCCESS   0
+#define SYS_ERROR   -200
 
-/* Serial / BLE / DHT begin (in the .ino) */
-void periph_begin(void);
+/* Assigns the callee's status to SYS_ERROR_CODE and halts if it is negative. */
+#define SYS_ERROR_CHECK(X)                              \
+    do {                                                \
+        SYS_ERROR_CODE = (X);                           \
+        if (SYS_ERROR_CODE < 0) {                       \
+            SYS_FATAL_ERROR(SYS_ERROR_CODE, __LINE__, __FILE__); \
+        }                                               \
+    } while (0)
 
-/* BLE serial */
-int  ble_available(void);
-int  ble_read(void);
-void ble_write_line(const char *text);
-void ble_write_raw(const char *text);     /* no ending added */
+extern int32_t SYS_ERROR_CODE;
 
-/* USB serial */
-void debug_write_line(const char *text);
+extern int32_t SYS_Init(void);
 
-/* DHT11. Returns false on failure, keeps old values. */
-bool dht_read(float *temp, float *hum);
-
-/* Debug probe, only when DEBUG_HC05_PROBE is 1 (see sys.c). */
-#if DEBUG_HC05_PROBE
-
-/* One LF-terminated line within timeout_ms. False on timeout. */
-bool sys_ble_read_line(char *line, size_t capacity, unsigned long timeout_ms);
-
-/* Run the AT console, print replies to USB serial. */
-void sys_debug_hc05_mac(void);
-
-#endif /* DEBUG_HC05_PROBE */
+/* De-energises the relay, reports over USB serial, then halts. */
+extern void SYS_FATAL_ERROR(int32_t err, int32_t line, const char *file);
 
 #ifdef __cplusplus
 }

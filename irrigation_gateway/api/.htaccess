@@ -1,0 +1,21 @@
+# Apache .htaccess for Irrigation Gateway API
+# Place at irrigation_gateway/api/.htaccess
+# Requires: AllowOverride All, mod_rewrite enabled
+
+RewriteEngine On
+
+# If the request is for a real file/directory, serve it
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Otherwise route everything through index.php
+RewriteRule ^ index.php [QSA,L]
+
+# Security headers
+Header always set X-Content-Type-Options "nosniff"
+Header always set X-Frame-Options "DENY"
+Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+# Disable directory listing
+Options -Indexes

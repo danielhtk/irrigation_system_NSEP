@@ -44,3 +44,9 @@ instance/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Deprecated
+*deprecated/
+
+# Output binary
+irrigation_gateway/gateway

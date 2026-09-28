@@ -1,11 +1,11 @@
-/* soil_sensor.c - soil moisture + majority vote */
+/* soil_sensor.c - soil moisture + majority vote. No delay() here. */
 
 #include "global.h"
 
-#include <stdio.h>   /* snprintf for drift alert */
+#include <stdio.h>   /* snprintf for the per-probe alert codes */
 
-int rawToPercent(int raw) {
-  /* Capacitive: HIGH = dry. Same as map+constrain to 0..100. */
+int32_t rawToPercent(int raw) {
+  /* Capacitive: HIGH = dry. */
   long pct = ((long)SOIL_RAW_AIR - (long)raw) * 100L
            / ((long)SOIL_RAW_AIR - (long)SOIL_RAW_WATER);
   if (pct < 0)   pct = 0;
@@ -13,26 +13,50 @@ int rawToPercent(int raw) {
   return (int)pct;
 }
 
-int readSoilAveraged(uint8_t pin, int *spread) {
-  long sum = 0;
-  int lowest = 1024, highest = -1;
-  uint8_t sample;
-  for (sample = 0; sample < 5; sample++) {
-    int reading = analogRead(pin);
-    sum += reading;
-    if (reading < lowest) lowest = reading;
-    if (reading > highest) highest = reading;
-    delay(4);
+int32_t readSoilAveraged(uint8_t probe, int16_t *raw, int16_t *spread) {
+  int32_t sum = 0;
+  int16_t reading, lowest = 1023, highest = -1;
+  uint8_t sample, channel;
+  int32_t result;
+
+  if (raw == NULL || spread == NULL) {
+    return SOIL_ERROR_ARG;
   }
-  if (spread != NULL) *spread = highest - lowest;
-  return (int)(sum / 5);
+  if (probe >= SOIL_SENSOR_COUNT) {
+    return SOIL_ERROR_ARG;
+  }
+
+  /* Channel follows config pin (A0 = ch 0). */
+  if (soil_pin(probe) < 14) {
+    return SOIL_ERROR_ARG;
+  }
+  channel = (uint8_t)(soil_pin(probe) - 14);
+  if (channel > ADC_CHANNEL_MAX) {
+    return SOIL_ERROR_ARG;
+  }
+
+  for (sample = 0; sample < SOIL_SAMPLE_COUNT; sample++) {
+    result = ADC_Read(channel, &reading);
+    if (result != ADC_SUCCESS) {
+      return result;
+    }
+    sum += reading;
+    if (reading < lowest)  { lowest = reading; }
+    if (reading > highest) { highest = reading; }
+  }
+
+  *raw    = (int16_t)(sum / SOIL_SAMPLE_COUNT);
+  *spread = (int16_t)(highest - lowest);
+
+  return SOIL_SUCCESS;
 }
 
-/* Reminder-style alert: fires at once, then at most every interval while held. */
-static void faultAlert(unsigned long *lastMs, bool *active, bool held, const char *code) {
-  unsigned long now = millis();
+/* Repeating alert while held. */
+static void faultAlert(uint32_t *lastMs, bool *active, bool held, const char *code) {
+  uint32_t now = SYS_TICK_Now();
+
   if (held) {
-    if (!*active || now - *lastMs >= LEVEL_ALERT_INTERVAL_MS) {
+    if (!*active || (int32_t)(now - *lastMs) >= (int32_t)LEVEL_ALERT_INTERVAL_MS) {
       *active = true;
       *lastMs = now;
       sendAlert(code);
@@ -42,30 +66,42 @@ static void faultAlert(unsigned long *lastMs, bool *active, bool held, const cha
   }
 }
 
-void readSoil(void) {
-  int     percent[SOIL_SENSOR_COUNT];
+int32_t readSoil(void) {
+  int32_t percent[SOIL_SENSOR_COUNT];
   bool    valid[SOIL_SENSOR_COUNT];
   uint8_t order[SOIL_SENSOR_COUNT];
   uint8_t probe, outer, inner, validCount;
   uint8_t excluded = 0;
+  /* probeMap is 8 bits; more probes would silently truncate the mask. */
+  _Static_assert(SOIL_SENSOR_COUNT >= 1 && SOIL_SENSOR_COUNT <= 8,
+                 "SOIL_SENSOR_COUNT must be 1..8 (probeMap is a uint8_t)");
   uint8_t allBits = (uint8_t)((1u << SOIL_SENSOR_COUNT) - 1u);
-  int votedPct;
+  int32_t votedPct;
+  int32_t result;
+  int16_t raw = 0;
+  int16_t spread = 0;
   static bool driftAlerted = false;   /* rising edge: outlier demoted */
   static bool splitActive = false;
-  static unsigned long lastSplitMs = 0;
+  static uint32_t lastSplitMs = 0;
   static bool noQuorumActive = false;
-  static unsigned long lastNoQuorumMs = 0;
-  static unsigned long lastFailMs[SOIL_SENSOR_COUNT] = { 0 };
+  static uint32_t lastNoQuorumMs = 0;
+  static uint32_t lastFailMs[SOIL_SENSOR_COUNT] = { 0 };
   static bool failActive[SOIL_SENSOR_COUNT] = { false };
 
   activeCount = 0;
 
   for (probe = 0; probe < SOIL_SENSOR_COUNT; probe++) {
-    int raw, spread = 0;
-    raw = readSoilAveraged(soil_pin(probe), &spread);
+    valid[probe] = false;
+    percent[probe] = 0;
+
+    result = readSoilAveraged(probe, &raw, &spread);
+    if (result != SOIL_SUCCESS) {
+      continue;               /* ADC failure: the probe simply does not vote */
+    }
+
+    percent[probe] = (int32_t)rawToPercent((int)raw);
     valid[probe]   = (raw >= SOIL_RAW_MIN && raw <= SOIL_RAW_MAX &&
                       spread <= SOIL_SPREAD_MAX);
-    percent[probe] = rawToPercent(raw);
     if (valid[probe]) {
       activeCount++;
     } else {
@@ -77,7 +113,7 @@ void readSoil(void) {
   for (probe = 0; probe < SOIL_SENSOR_COUNT; probe++) {
     if (!valid[probe]) {
       char code[16];
-      snprintf(code, sizeof(code), "PROBE_FAIL:%d", probe);
+      snprintf(code, sizeof(code), "PROBE_FAIL:%u", probe);
       code[sizeof(code) - 1] = '\0';
       faultAlert(&lastFailMs[probe], &failActive[probe], true, code);
     } else {
@@ -92,7 +128,7 @@ void readSoil(void) {
     faultAlert(&lastNoQuorumMs, &noQuorumActive, true, "SENSOR_FAULT");
     faultAlert(&lastSplitMs, &splitActive, false, NULL);
     driftAlerted = false;
-    return;
+    return SOIL_SUCCESS;
   }
   faultAlert(&lastNoQuorumMs, &noQuorumActive, false, NULL);
 
@@ -102,7 +138,7 @@ void readSoil(void) {
     if (valid[probe]) order[validCount++] = probe;
   }
   for (outer = 0; outer + 1 < validCount; outer++) {
-    for (inner = outer + 1; inner < validCount; inner++) {
+    for (inner = (uint8_t)(outer + 1); inner < validCount; inner++) {
       if (percent[order[inner]] < percent[order[outer]]) {
         uint8_t swap = order[outer];
         order[outer] = order[inner];
@@ -118,14 +154,14 @@ void readSoil(void) {
     for (outer = 0; outer < validCount; outer++) {
       for (inner = (uint8_t)(outer + 1); inner < validCount; inner++) {
         if (percent[order[inner]] - percent[order[outer]] > SOIL_SPLIT_MAX) break;
-        if (inner - outer + 1 > winEnd - winStart) {
+        if ((uint8_t)(inner - outer + 1) > (uint8_t)(winEnd - winStart)) {
           winStart = outer;
           winEnd = (uint8_t)(inner + 1);
         }
       }
     }
     winSize = (uint8_t)(winEnd - winStart);
-    if (winSize >= 2 && winSize * 2 > validCount) {
+    if (winSize >= 2 && (uint16_t)(winSize * 2) > (uint16_t)validCount) {
       /* Vote = median of the agreeing set (mean of middle two if even). */
       if (winSize & 1) {
         votedPct = percent[order[winStart + winSize / 2]];
@@ -141,7 +177,7 @@ void readSoil(void) {
           if (pos < winStart || pos >= winEnd) {
             char code[16];
             excluded |= (uint8_t)(1u << order[pos]);
-            snprintf(code, sizeof(code), "PROBE_DRIFT:%d", order[pos]);
+            snprintf(code, sizeof(code), "PROBE_DRIFT:%u", order[pos]);
             code[sizeof(code) - 1] = '\0';
             sendAlert(code);
           }
@@ -155,14 +191,16 @@ void readSoil(void) {
       probeMap = allBits;
       driftAlerted = false;
       faultAlert(&lastSplitMs, &splitActive, true, "PROBE_SPLIT");
-      return;
+      return SOIL_SUCCESS;
     }
   }
 
   probeMap = excluded;
-  soilPct = votedPct;
-  /* 0% means no data, not dry. SOIL_RAW_AIR_MARGIN ensures bone-dry
-     soil reads > 0% (e.g. 1-5%) so it waters instead of faulting.
+  soilPct = (int)votedPct;
+  /* 0% means no data, not dry. Set SOIL_RAW_AIR = driest_real_reading + 50
+     so bone-dry soil reads > 0% (e.g. 1-5%) and waters instead of faulting.
      0% only occurs on true disconnect (caught by spread) or rail short. */
   sensorFault = (votedPct < SOIL_PCT_VALID_MIN || votedPct > 100);
+
+  return SOIL_SUCCESS;
 }

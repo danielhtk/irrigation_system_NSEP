@@ -1,118 +1,138 @@
-/* pump_control.c - hysteresis + safety + rain-aware + anti-short-cycle.
- * Polarity from RELAY_ACTIVE_LOW. */
+/* pump_control.c - hysteresis + safety + rain. Times use signed SYS_TICK diffs. */
 
 #include "global.h"
+
 #include <math.h>    /* isnan */
 
-/* Anti-short-cycle: track last pump-off time.
- * Init to -PUMP_MIN_OFF_MS so first run after boot isn't blocked. */
-static unsigned long lastPumpOffMs = 0UL - PUMP_MIN_OFF_MS;
+/* Backdated so first boot run is not blocked. */
+static uint32_t lastPumpOffMs = 0UL - PUMP_MIN_OFF_MS;
 
-/* Auto-resume after fault state */
-static unsigned long healthyReadings = 0;
-static unsigned long lastSenseMarker = 0;
+/* Armed only when auto is forced off; any manual command disarms. */
+static bool faultRecoveryArmed = false;
+static uint32_t healthyReadings = 0;
+static uint32_t lastSenseMarker = 0;
 
 /* Level alert timers */
-static unsigned long lastDroughtAlertMs = 0UL - LEVEL_ALERT_INTERVAL_MS;
-static unsigned long lastFloodAlertMs = 0UL - LEVEL_ALERT_INTERVAL_MS;
+static uint32_t lastDroughtAlertMs = 0UL - LEVEL_ALERT_INTERVAL_MS;
+static uint32_t lastFloodAlertMs = 0UL - LEVEL_ALERT_INTERVAL_MS;
 
-void setPump(bool on) {
+int32_t setPump(bool on) {
   if (on && !pumpState) {
-    pumpStartMs = millis();
+    pumpStartMs = SYS_TICK_Now();
   }
-  if (!on) {
-    waterDeadline = 0;   /* any stop cancels a timed run */
-    lastPumpOffMs = millis();  /* track for min-off window */
+  if (!on && pumpState) {
+    /* Stamp once: refreshing while off would block min-off forever. */
+    waterDeadline = 0;            /* any stop cancels a timed run */
+    lastPumpOffMs = SYS_TICK_Now(); /* track for min-off window */
+  } else if (!on) {
+    waterDeadline = 0;            /* already off: still cancel a stale deadline */
   }
   pumpState = on;
-#if RELAY_ACTIVE_LOW
-  digitalWrite(PIN_RELAY, on ? LOW : HIGH);
-#else
-  digitalWrite(PIN_RELAY, on ? HIGH : LOW);
-#endif
+
+  return GPIO_Write(PIN_RELAY, on ? RELAY_ON_LEVEL : RELAY_OFF_LEVEL);
 }
 
-void enforcePumpSafety(void) {
-  unsigned long now = millis();
+int32_t enforcePumpSafety(void) {
+  uint32_t now = SYS_TICK_Now();
 
-  /* Untrusted data: auto mode is unavailable. A pump left running from
-     auto dies now and control drops to manual; manual overrides below
-     are the user's call, capped by time. */
+  /* No trusted data: drop to manual, stop auto pump. */
   bool sensorsHealthy = !sensorFault && activeCount >= 2 &&
                         soilPct >= SOIL_PCT_VALID_MIN && soilPct <= 100;
 
   if (!sensorsHealthy) {
     if (autoMode) {
       autoMode = false;
-      if (pumpState) setPump(false);
+      faultRecoveryArmed = true;   /* arm only on the forcing transition */
+      if (pumpState) {
+        SYS_ERROR_CHECK(setPump(false));
+      }
       sendAlert("AUTO_OFF_FAULT");
     }
     healthyReadings = 0;  /* reset on any fault */
   } else {
-    /* Auto-resume after fault: count consecutive healthy SENSE cycles (not loops).
-     * Only increment when lastSense advances (new sense cycle completed). */
-    if (!autoMode && AUTO_RESUME_AFTER_FAULT) {
-      extern unsigned long lastSense;
+    /* Count healthy SENSE cycles for auto-resume. */
+    if (faultRecoveryArmed && AUTO_RESUME_AFTER_FAULT) {
       if (lastSense != lastSenseMarker) {
         lastSenseMarker = lastSense;
         healthyReadings++;
         if (healthyReadings >= AUTO_RESUME_HEALTHY_READINGS) {
           autoMode = true;
+          faultRecoveryArmed = false;
           sendAlert("AUTO_RESUME");
         }
       }
     } else {
       healthyReadings = 0;
       /* Reset marker when not in fault-recovery mode so we don't count stale cycles */
-      extern unsigned long lastSense;
       lastSenseMarker = lastSense;
     }
   }
 
-  /* Time cap applies in every mode: the longest any run may last. */
-  if (pumpState && (now - pumpStartMs >= PUMP_MAX_RUN_MS)) {
-    setPump(false);
+  /* 5-min cap applies in every mode. */
+  if (pumpState && (int32_t)(now - pumpStartMs) >= (int32_t)PUMP_MAX_RUN_MS) {
+    SYS_ERROR_CHECK(setPump(false));
     cooldownUntil = now + PUMP_COOLDOWN_MS;
     sendAlert("SAFETY_CUTOFF");
-    return;
+    return SYS_SUCCESS;
   }
-  /* Firmware watering timer: stops the pump at the deadline. */
-  if (waterDeadline != 0 && (int32_t)(sys_tick_now() - waterDeadline) >= 0) {
-    setPump(false);   /* clears the deadline */
+
+  /* Timed run hit its deadline. */
+  if (waterDeadline != 0 && (int32_t)(now - waterDeadline) >= 0) {
+    SYS_ERROR_CHECK(setPump(false));   /* clears the deadline */
     sendAlert("WATER_DONE");
   }
+
+  return SYS_SUCCESS;
 }
 
-void startTimedWater(unsigned long secs) {
-  unsigned long cap = PUMP_MAX_RUN_MS / 1000UL;
-  if (secs < 1) secs = 1;
-  if (secs > cap) secs = cap;
+/* Manual command cancels pending auto-resume. */
+void pump_disarmAutoResume(void) {
+  faultRecoveryArmed = false;
+  healthyReadings = 0;
+}
+
+int32_t startTimedWater(uint32_t secs) {
+  uint32_t cap = PUMP_MAX_RUN_MS / 1000UL;
+
+  if (secs < 1) {
+    secs = 1;
+  }
+  if (secs > cap) {
+    secs = cap;
+  }
   autoMode = false;
-  setPump(true);
-  waterDeadline = sys_tick_now() + secs * 1000UL;
+  pump_disarmAutoResume();   /* timed run is a manual command */
+  SYS_ERROR_CHECK(setPump(true));
+  waterDeadline = SYS_TICK_Now() + (secs * 1000UL);
+
+  return SYS_SUCCESS;
 }
 
-unsigned int timedWaterLeft(void) {
+uint16_t timedWaterLeft(void) {
   int32_t left;
-  if (waterDeadline == 0 || !pumpState) return 0;
-  left = (int32_t)(sys_tick_now() - waterDeadline);
-  if (left >= 0) return 0;
-  return (unsigned int)((uint32_t)(-left) / 1000UL);
+
+  if (waterDeadline == 0 || !pumpState) {
+    return 0;
+  }
+  left = (int32_t)(SYS_TICK_Now() - waterDeadline);
+  if (left >= 0) {
+    return 0;
+  }
+  return (uint16_t)((uint32_t)(-left) / 1000UL);
 }
 
 /* Rain evaluation state */
-static unsigned long lastRainEvalMs = 0;
+static uint32_t lastRainEvalMs = 0;
 static bool lastRainSkipActive = false;
 static bool lastRainHoldActive = false;
-static unsigned long lastRainSkipAlertMs = 0;
-static unsigned long lastRainHoldAlertMs = 0;
-static unsigned long lastForecastStaleAlertMs = 0;
+static uint32_t lastRainSkipAlertMs = 0;
+static uint32_t lastRainHoldAlertMs = 0;
+static uint32_t lastForecastStaleAlertMs = 0;
 /* forecastReceived and lastRainfMs are in app_state.c */
 
-/* Evaluate rain logic: called from runControlLogic at RAIN_EVAL_INTERVAL_MS.
- * Returns the effective observed rain state (rainNow || rainAuto). */
+/* Rain check runs every 60 s. Returns rainNow || rainAuto. */
 static bool evaluateRain(void) {
-  unsigned long now = millis();
+  uint32_t now = SYS_TICK_Now();
 
   /* Rain-aware disabled? */
   if (!rainAwareEnabled) {
@@ -120,29 +140,31 @@ static bool evaluateRain(void) {
     return rainNow;
   }
 
-  /* Check forecast freshness */
+  /* Fresh if seen within TTL. */
   bool forecastFresh = false;
-  if (forecastReceived && now - lastRainfMs <= RAIN_FORECAST_TTL_MS) {
+  if (forecastReceived &&
+      (int32_t)(now - lastRainfMs) <= (int32_t)RAIN_FORECAST_TTL_MS) {
     forecastFresh = true;
   } else if (forecastReceived) {
     /* Forecast stale */
     forecastReceived = false;
-    if (!lastForecastStaleAlertMs ||
-        now - lastForecastStaleAlertMs >= LEVEL_ALERT_INTERVAL_MS) {
+    if (lastForecastStaleAlertMs == 0 ||
+        (int32_t)(now - lastForecastStaleAlertMs) >= (int32_t)LEVEL_ALERT_INTERVAL_MS) {
       lastForecastStaleAlertMs = now;
       sendAlert("FORECAST_STALE");
     }
   }
 
-  /* Humidity rule for rainAuto (observed rain auto-detected) */
+  /* Set at 90%, clear at 85% or when forecast ages out. */
   if (forecastFresh && !isnan(humPct) && humPct > RAIN_HUMIDITY_OBSERVED_THRESH) {
     if (!rainAuto) {
       rainAuto = true;
       sendAlert("RAIN_OBSERVED");
     }
   } else {
-    /* Clear rainAuto with hysteresis (90% set, 85% clear) or forecast aged out */
-    if (rainAuto && (isnan(humPct) || humPct < (RAIN_HUMIDITY_OBSERVED_THRESH - 5) || !forecastFresh)) {
+    /* Hysteresis clear. */
+    if (rainAuto && (isnan(humPct) || humPct < (RAIN_HUMIDITY_OBSERVED_THRESH - 5) ||
+                     !forecastFresh)) {
       rainAuto = false;
     }
   }
@@ -150,15 +172,31 @@ static bool evaluateRain(void) {
   return rainNow || rainAuto;
 }
 
-/* Evaluate rain-aware watering decision.
- * Returns target off percentage (threshHigh, RAIN_HOLD_CAP_Z_PCT, or 0 for skip).
- * 0 means skip watering entirely. */
-static int evaluateRainWatering(bool observedRain) {
-  unsigned long now = millis();
+/* Returns OFF target (threshHigh, hold cap, or 0 = skip). */
+static int32_t evaluateRainWatering(bool observedRain) {
+  uint32_t now = SYS_TICK_Now();
+  bool humidSkip;
+  bool holding;
 
-  /* Step 1: Soil below threshLow? */
-  if (soilPct >= threshLow) {
-    /* Not dry enough - clear any active rain alerts */
+  /* Observed rain: never water, and drop any hold/skip state. */
+  if (observedRain) {
+    lastRainSkipActive = false;
+    lastRainHoldActive = false;
+    return 0;  /* Skip watering */
+  }
+
+  /* Fresh forecast: skip if the air is already saturated, otherwise hold back
+   * to cap Z. Below the emergency floor we water regardless - critically dry
+   * soil outranks a forecast. */
+  humidSkip = forecastReceived && !isnan(humPct) &&
+              humPct > RAIN_HUMIDITY_SKIP_THRESH &&
+              soilPct > RAIN_EMERGENCY_FLOOR_PCT;
+  holding = forecastReceived && !humidSkip;
+
+  /* "Dry enough, nothing pending" only when no hold is in play. Cap Z sits
+   * between threshLow and threshHigh, so this shortcut must not swallow it,
+   * otherwise the hold could never stop the pump. */
+  if (soilPct >= threshLow && !holding) {
     if (lastRainSkipActive) {
       lastRainSkipActive = false;
     }
@@ -168,41 +206,28 @@ static int evaluateRainWatering(bool observedRain) {
     return threshHigh;
   }
 
-  /* Step 2: Observed rain now? */
-  if (observedRain) {
-    if (lastRainSkipActive) {
-      lastRainSkipActive = false;
+  if (humidSkip) {
+    /* Skip watering */
+    if (!lastRainSkipActive ||
+        (int32_t)(now - lastRainSkipAlertMs) >= (int32_t)LEVEL_ALERT_INTERVAL_MS) {
+      lastRainSkipActive = true;
+      lastRainSkipAlertMs = now;
+      sendAlert("WATER_SKIP");
     }
-    if (lastRainHoldActive) {
-      lastRainHoldActive = false;
-    }
-    return 0;  /* Skip watering */
+    lastRainHoldActive = false;
+    return 0;
   }
 
-  /* Step 3: Fresh forecast >= Y mm within X h? */
-  if (forecastReceived) {
-    /* Cross-check humidity */
-    if (!isnan(humPct) && humPct > RAIN_HUMIDITY_SKIP_THRESH && soilPct > RAIN_EMERGENCY_FLOOR_PCT) {
-      /* Skip watering */
-      if (!lastRainSkipActive ||
-          now - lastRainSkipAlertMs >= LEVEL_ALERT_INTERVAL_MS) {
-        lastRainSkipActive = true;
-        lastRainSkipAlertMs = now;
-        sendAlert("WATER_SKIP");
-      }
-      lastRainHoldActive = false;
-      return 0;
-    } else {
-      /* Water to holding cap Z */
-      if (!lastRainHoldActive ||
-          now - lastRainHoldAlertMs >= LEVEL_ALERT_INTERVAL_MS) {
-        lastRainHoldActive = true;
-        lastRainHoldAlertMs = now;
-        sendAlert("WATER_HOLD");
-      }
-      lastRainSkipActive = false;
-      return RAIN_HOLD_CAP_Z_PCT;
+  if (holding) {
+    /* Water to holding cap Z */
+    if (!lastRainHoldActive ||
+        (int32_t)(now - lastRainHoldAlertMs) >= (int32_t)LEVEL_ALERT_INTERVAL_MS) {
+      lastRainHoldActive = true;
+      lastRainHoldAlertMs = now;
+      sendAlert("WATER_HOLD");
     }
+    lastRainSkipActive = false;
+    return RAIN_HOLD_CAP_Z_PCT;
   }
 
   /* No/light rain: full water to threshHigh */
@@ -215,55 +240,53 @@ static int evaluateRainWatering(bool observedRain) {
   return threshHigh;
 }
 
-void runControlLogic(void) {
-  unsigned long now = millis();
-  int targetOff = threshHigh;
+int32_t runControlLogic(void) {
+  uint32_t now = SYS_TICK_Now();
+  int32_t targetOff = threshHigh;
   bool observedRain;
 
   /* Any of these forces the pump off. 0% never waters. */
-  if (sensorFault)              { setPump(false); return; }
-  if (activeCount < 2)          { setPump(false); return; }
+  if (sensorFault)              { SYS_ERROR_CHECK(setPump(false)); return SYS_SUCCESS; }
+  if (activeCount < 2)          { SYS_ERROR_CHECK(setPump(false)); return SYS_SUCCESS; }
   if (soilPct < SOIL_PCT_VALID_MIN || soilPct > 100) {
-    setPump(false);
-    return;
+    SYS_ERROR_CHECK(setPump(false));
+    return SYS_SUCCESS;
   }
 
   /* Rain evaluation (throttled) */
-  if (now - lastRainEvalMs >= RAIN_EVAL_INTERVAL_MS) {
+  if ((int32_t)(now - lastRainEvalMs) >= (int32_t)RAIN_EVAL_INTERVAL_MS) {
     lastRainEvalMs = now;
     observedRain = evaluateRain();
   } else {
     observedRain = rainNow || rainAuto;
   }
 
-  if (observedRain)             { setPump(false); return; }
-  if (now < cooldownUntil)      { setPump(false); return; }
+  if (observedRain)             { SYS_ERROR_CHECK(setPump(false)); return SYS_SUCCESS; }
+  if ((int32_t)(now - cooldownUntil) < 0) { SYS_ERROR_CHECK(setPump(false)); return SYS_SUCCESS; }
 
   /* Anti-short-cycle: minimum off time between auto runs.
    * Only gates pump START, not the whole tail (alerts still evaluated). */
-  if (!pumpState && now - lastPumpOffMs < PUMP_MIN_OFF_MS) {
-    /* Still in min-off window, but don't suppress alerts */
-  } else {
-    /* Determine rain-aware target off percentage */
+  if (pumpState || (int32_t)(now - lastPumpOffMs) >= (int32_t)PUMP_MIN_OFF_MS) {
+    /* Rain-awareness only picks the stop target (and may veto watering for this
+     * cycle). The basic threshLow -> targetOff hysteresis runs either way, so
+     * clearing the flag must not disable automatic watering altogether. */
     if (rainAwareEnabled) {
       targetOff = evaluateRainWatering(observedRain);
-      if (targetOff == 0) {  /* skip watering */
-        /* fall through to alerts */
-      } else {
-        /* Normal hysteresis with dynamic targetOff */
-        if (!pumpState && soilPct < threshLow) {
-          setPump(true);
-          sendAlert("PUMP_ON_DRY");
-        }
-        else if (pumpState && soilPct >= targetOff) {
-          /* Check min-run before stopping on threshold */
-          if (now - pumpStartMs >= PUMP_MIN_RUN_MS) {
-            setPump(false);
-            if (targetOff == RAIN_HOLD_CAP_Z_PCT) {
-              sendAlert("PUMP_OFF_HOLD");
-            } else {
-              sendAlert("PUMP_OFF_TARGET");
-            }
+    }
+
+    if (targetOff != 0) {              /* 0 = skip watering this cycle */
+      if (!pumpState && soilPct < threshLow) {
+        SYS_ERROR_CHECK(setPump(true));
+        sendAlert("PUMP_ON_DRY");
+      }
+      else if (pumpState && soilPct >= targetOff) {
+        /* Check min-run before stopping on threshold */
+        if ((int32_t)(now - pumpStartMs) >= (int32_t)PUMP_MIN_RUN_MS) {
+          SYS_ERROR_CHECK(setPump(false));
+          if (rainAwareEnabled && targetOff == RAIN_HOLD_CAP_Z_PCT) {
+            sendAlert("PUMP_OFF_HOLD");
+          } else {
+            sendAlert("PUMP_OFF_TARGET");
           }
         }
       }
@@ -272,13 +295,15 @@ void runControlLogic(void) {
 
   /* Level alerts: at most one per interval (always evaluated). */
   if (soilPct <= ALERT_DROUGHT_PCT &&
-      now - lastDroughtAlertMs >= LEVEL_ALERT_INTERVAL_MS) {
+      (int32_t)(now - lastDroughtAlertMs) >= (int32_t)LEVEL_ALERT_INTERVAL_MS) {
     lastDroughtAlertMs = now;
     sendAlert("DROUGHT");
   }
   if (soilPct >= ALERT_FLOOD_PCT &&
-      now - lastFloodAlertMs >= LEVEL_ALERT_INTERVAL_MS) {
+      (int32_t)(now - lastFloodAlertMs) >= (int32_t)LEVEL_ALERT_INTERVAL_MS) {
     lastFloodAlertMs = now;
     sendAlert("OVERWATERED");
   }
+
+  return SYS_SUCCESS;
 }
